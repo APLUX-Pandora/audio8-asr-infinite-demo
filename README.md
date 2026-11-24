@@ -58,26 +58,14 @@ This installs the SDK, the Web Demo and the Hugging Face CLI. To use only the SD
 
 ## 2. Get the model
 
-The default download is the 160ms profile. Choose the target for your device.
+Download the shared files and one device target. The commands below use QCS8550; for another device, use the folder in the [targets table](docs/MODEL_SETUP.md#targets). The default is 160 ms; see [80 ms setup](docs/MODEL_SETUP.md#80ms) for the other profile.
 
-| Device | Target folder |
-| --- | --- |
-| QCS8550 | `qcs8550_qnn248` |
-| QCS8625 | `qcs8625_qnn248` |
-| QCS8275 / IQ8 | `qcs8275_qnn248` |
-| QCS9075 / IQ9 | `qcs9075_qnn248` |
-
-Use your row's target folder in the second command.
-
-Download the shared resources and the target for your device. This example uses QCS8550:
+For a private model, run `hf auth login` first.
 
 ```bash
 hf download APLUX-Pandora/Audio8-ASR-Infinite-160ms --local-dir models --exclude "targets/*" --exclude "media/*" --exclude README.md --exclude .gitattributes
 hf download APLUX-Pandora/Audio8-ASR-Infinite-160ms --local-dir models --include "targets/qcs8550_qnn248/*"
 ```
-
-For a private repository, run `hf auth login` first. Available targets and the folder layout are in [Model setup](docs/MODEL_SETUP.md).
-For the optional 80ms profile, follow the [80ms download instructions](docs/MODEL_SETUP.md#80ms).
 
 ## 3. Run the Web Demo
 
