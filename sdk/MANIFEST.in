@@ -1,0 +1,9 @@
+include pyproject.toml setup.py _build_payload.py native-library.json README.md
+include wheels/pandora_runtime-*.whl
+recursive-include python *.py LICENSE
+include lib/libaudio8_asr.so lib/LICENSE lib/LICENSE.zh-CN.txt lib/THIRD_PARTY_NOTICES.txt
+recursive-include lib/LICENSES *
+
+include include/audio8_asr.h include/pandora_runtime.h RUNTIME_API.md PYTHON_API.md
+
+recursive-include lib/qnn248 *

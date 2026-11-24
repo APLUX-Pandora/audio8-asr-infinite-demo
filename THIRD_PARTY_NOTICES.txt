@@ -1,0 +1,58 @@
+Audio8-ASR-Infinite Third-Party Notices
+=======================================
+
+Third-party components
+----------------------
+sdk/lib/libaudio8_asr.so includes nlohmann/json
+  Copyright (c) 2013-2025 Niels Lohmann <https://nlohmann.me>
+  License: MIT
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+  rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+  persons to whom the Software is furnished to do so, subject to the following conditions:
+  The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+  Software.
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+  WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+  OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Edge0 Audio8-ASR-Infinite audio worklet (demo/static/pcm-worklet.js)
+  Source: https://github.com/Edge0-AI/Audio8-ASR-Infinite/blob/main/client/pcm-worklet.js
+  License: Apache-2.0 (LICENSES/Apache-2.0.txt)
+  APLUX modified the resampling and added multichannel input, reset, and end-of-stream flushing.
+
+Silero VAD (demo/assets/silero_vad.onnx, bundled for the Demo silence gate)
+  https://github.com/snakers4/silero-vad
+  License: MIT (LICENSES/Silero-VAD-MIT.txt)
+
+Runtime
+-------
+The SDK distributes Qualcomm QNN user-space libraries. Their terms and notices
+are in sdk/lib/qnn248/LICENSE.pdf, sdk/lib/qnn248/NOTICE.txt and
+sdk/lib/qnn248/QNN_NOTICE.txt. The statically linked Pandora QNN Runtime
+integration is Apache 2.0. Its license and notice are in sdk/lib/LICENSES/.
+Device prerequisites are listed in sdk/README.md.
+
+Pandora Runtime (separate wheel, Apache-2.0)
+  The Runtime wheel contains its license and NOTICE.
+
+OpenSSL 3.0.2-0ubuntu1.30 (libcrypto, statically linked in the native SDK)
+  Source: https://www.openssl.org/
+  License: Apache-2.0 (LICENSES/Apache-2.0.txt)
+  Original attribution: LICENSES/OpenSSL-copyright.txt
+
+Demo media
+----------
+The built-in Web Demo clips and examples/audio/speech.wav use original sample text,
+graphics and synthetic speech, distributed under Apache 2.0.
+The README recording includes an excerpt of Lorna Mitchell’s FOSDEM talk
+“Beyond the README: Crafting a better developer experience for open source projects”
+under CC BY 2.0 Belgium (https://creativecommons.org/licenses/by/2.0/be/).
+See docs/MEDIA_ATTRIBUTION.md for the source, license and changes.
+
+ICU code and its complete Unicode data are statically embedded in libaudio8_asr.so
+for Unicode normalization and regular expressions. No system ICU package is required.
+Source: https://github.com/unicode-org/icu
+The complete ICU copyright, Unicode data and third-party notices accompany this SDK in sdk/lib/LICENSES/ICU.txt.

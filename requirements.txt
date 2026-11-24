@@ -1,0 +1,4 @@
+./sdk/wheels/pandora_runtime-1.0.2-py3-none-linux_aarch64.whl
+./sdk
+onnxruntime>=1.16    # Required only for the Web Demo silence gate
+huggingface_hub>=1.0,<2

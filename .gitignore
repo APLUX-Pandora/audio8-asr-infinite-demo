@@ -1,0 +1,13 @@
+.venv/
+.hf-tools/
+build/
+__pycache__/
+*.pyc
+*.log
+# Downloaded model resources and HF cards are runtime data
+models/*
+demo/media/uploads/
+
+*.egg-info/
+/sdk/dist/
+/dist/

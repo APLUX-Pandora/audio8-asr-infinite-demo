@@ -1,0 +1,16 @@
+Audio8-ASR-Infinite
+==================
+
+APLUX-authored application, example and web demo code is distributed under Apache 2.0.
+The prebuilt native SDK has separate terms for proprietary contributions.
+See LICENSING.md and the license texts in LICENSES/ and sdk/lib/.
+
+Third-party components and media retain their applicable terms. See
+THIRD_PARTY_NOTICES.txt for the Edge0 audio worklet, Qualcomm QNN runtime, SDK libraries and
+media credits.
+The native SDK statically links OpenSSL 3.0.2-0ubuntu1.30 (libcrypto),
+licensed under Apache-2.0. See LICENSES/Apache-2.0.txt for the full license
+and LICENSES/OpenSSL-copyright.txt for the original attribution.
+The model files are downloaded separately. See docs/MODEL_SETUP.md for setup
+and the model download for the terms that apply to its weights, tensors and
+other components.
