@@ -8,7 +8,8 @@ back over Server-Sent Events. Pause = no audio = transcription pauses; seeking s
 
 - Silence gate: Silero VAD (vad_gate.py) between the audio and the engine: the non-speech before the first speech onset
   becomes zeros (the engine clock keeps running); threshold and look-ahead are set from the page (next Start).
-- Soft-reset policy (reset_policy.py): after long non-speech stretches the engine re-listens to the last seconds.
+- Stream recovery: after a quiet gap, sustained sound without new text can start a fresh SDK stream
+  with short audio replay. The Web transcript stays in place.
 - End of turn: the model's semantic-VAD probabilities come with every token and go to the page (meter, curves,
   paragraph breaks).
 - Board DRAM (sys events every 0.5 s) and per-token RTF (step time / clock) for the page's charts.
@@ -163,6 +164,7 @@ class Session:
         if self.lang not in LANGS:
             raise ValueError('A8_LANG must be "zh" or "en"')
         self.asr = None
+        self.policy = None
         self.model = None
         self.worker_thread = threading.Thread(target=self.worker, name="asr-worker", daemon=True)
         self.sysmon_thread = threading.Thread(target=self.sysmon, name="asr-sysmon", daemon=True)
@@ -208,12 +210,11 @@ class Session:
         except BaseException:
             self.close_engine()
             raise
-        self.policy = ResetPolicy(self.asr)
         self.init_s = time.time() - t
-        self.fs = self.asr._sampling_rate
-        self.spt = self.asr._samples_per_token
-        self.clock_ms = 1000.0 * self.spt / self.fs
-        self.engine_profile = dict(self.asr._info)
+        self.fs = 16000
+        self.engine_profile = self.model.info
+        self.spt = self.engine_profile["samples_per_token"]
+        self.clock_ms = self.engine_profile["clock_ms"]
         self.n_gen = 0
 
     def close_engine(self):
@@ -485,6 +486,8 @@ class Session:
         # pend = gated samples not yet fed; fed = samples fed to the engine in this run. The audio arrives from the page in
         # 100 ms chunks (self.audio) while the video plays.
         fed, pend, steps, t_start, first_char = 0, np.zeros(0, np.float32), collections.deque(maxlen=200), 0.0, None
+        stream_start, stream_chars = 0, 0
+        last_char, join_replay = "", False
         flushed, warned = False, False
         while not self.closing.is_set():
             with self.lock:
@@ -506,9 +509,11 @@ class Session:
                     hotwords = dict(self.hotwords)
                 hints = HotwordConfig(tuple(hotwords["words"]), hotwords["top_k"],
                                       hotwords["start_boost"], hotwords["continuation_boost"])
-                asr = self.asr = self.model.create_stream(sample_rate=self.fs, language=self.lang,
-                                                         hotwords=hints)
-                self.policy = ResetPolicy(asr)
+                options = dict(sample_rate=self.fs, language=self.lang, hotwords=hints)
+                self.asr = self.model.create_stream(**options)
+                self.policy = ResetPolicy(self.fs, self.spt, roll_s=self.engine_profile["roll_s"])
+                stream_start, stream_chars = 0, 0
+                last_char, join_replay = "", False
                 self.gate.reset()
                 self.n_gen = 0
                 self.off_s = off_s
@@ -534,25 +539,46 @@ class Session:
             done, reason = False, None
             if not asr._info["roll_s"] and asr._diagnostic_stats()["lm_pos"] >= MAX_POS - STOP_MARGIN:
                 done, reason = True, "limit"
-            elif pend.size:                               # at most one token of audio per call so the guard above holds
+            elif pend.size >= self.spt or (flushed and pend.size):
+                # Keep recovery windows aligned across incoming HTTP chunks.
                 t = time.time()
                 chunk, pend = pend[:self.spt], pend[self.spt:]
-                toks = self.policy.check(*self.gate.segment())    # soft-reset trigger (business layer) before the next row
-                piece = asr._last_update.delta if toks else ""
                 update = asr.feed(chunk)
+                fed += chunk.size
+                replay = self.policy.observe(chunk, update.delta, fed)
+                recovery = None
+                if replay is not None:
+                    with self.lock:
+                        if self.sid != sid or self.state != "running" or self.closing.is_set():
+                            continue
+                    restart_at = time.monotonic()
+                    asr.close()
+                    asr = self.asr = self.model.create_stream(**options)
+                    stream_start = fed - replay.size
+                    join_replay = bool(last_char and not last_char.isspace() and self.lang == "en")
+                    # Replay starts after the last text sent to the browser.
+                    # Only the new stream's text is published at this boundary.
+                    update = asr.feed(replay)
+                    recovery = self.policy.record(fed, replay.size)
+                    recovery["replay_wall_s"] = round(time.monotonic() - restart_at, 3)
                 with self.lock:
                     if self.sid == sid:
                         self.audio_pending_samples = max(0, self.audio_pending_samples - chunk.size)
-                piece += update.delta
-                new = list(asr._tokens)
-                self.policy.observe(new)
-                toks += new
-                fed += chunk.size
+                stream_chars = len(update.text)
+                piece = update.delta
+                if piece and join_replay:
+                    if piece[0].isalnum():
+                        piece = " " + piece
+                    join_replay = False
+                if piece:
+                    last_char = piece[-1]
+                toks = asr._tokens
                 if toks:
                     steps.append((time.time() - t) / len(toks))
                 if first_char is None and any(asr._token_bytes(k.id) for k in toks):
                     first_char = time.time() - t_start
-                self.emit(sid, toks, piece, fed, steps, first_char, eot=self.eot(toks))
+                self.emit(sid, toks, piece, fed, steps, first_char, eot=self.eot(toks),
+                          stream_start=stream_start, recovery=recovery)
                 continue
             elif ended and flushed:
                 done, reason = True, "end"
@@ -567,9 +593,12 @@ class Session:
                 continue
             if done:
                 result = asr.finish()
-                toks = list(asr._tokens)
-                self.policy.observe(toks)
-                self.emit(sid, toks, asr._last_update.delta, fed, steps, first_char, eot=self.eot(toks))
+                toks = asr._tokens
+                piece = result.text[stream_chars:]
+                if piece and join_replay and piece[0].isalnum():
+                    piece = " " + piece
+                self.emit(sid, toks, piece, fed, steps, first_char, eot=self.eot(toks),
+                          stream_start=stream_start)
                 with self.lock:
                     if self.sid == sid and self.state == "running":
                         self.state = "done"
@@ -636,21 +665,24 @@ class Session:
         """P(class 0 = no speech within each horizon) after the newest token (semantic VAD, computed by the SDK)."""
         return [round(float(v), 3) for v in toks[-1].eot] if toks else None
 
-    def emit(self, sid, toks, piece, fed, steps, first_char, eot=None):
+    def emit(self, sid, toks, piece, fed, steps, first_char, eot=None, *, stream_start=0, recovery=None):
         a = self.asr
         self.n_gen += len(toks)
-        # Text is decoded by the public SDK; tokens remain diagnostics for
-        # timestamps, semantic VAD and the optional recovery policy.
+        # Text comes from the public SDK. Token diagnostics serve the charts.
         ms = 1000 * np.fromiter(steps, dtype=np.float64) if steps else np.zeros(1)
         # video time of the first text token of this piece (its row time minus the model delay), for paragraph timestamps
         t_first = None
         for k in toks:
             if a._token_bytes(k.id).strip():
-                t_first = round(self.off_s + max(0.0, k.audio_t - self.clock_ms * a._info["num_delay_tokens"] / 1000), 2); break
+                t_first = round(self.off_s + stream_start / self.fs
+                                + max(0.0, k.audio_t - self.clock_ms * a._info["num_delay_tokens"] / 1000), 2)
+                break
         event = {"type": "text", "sid": sid, "piece": piece, "audio_s": round(self.off_s + fed / self.fs, 2), "t_first": t_first, "tokens": self.n_gen,
                         "lm_pos": a._diagnostic_stats()["lm_pos"], "step_ms": round(float(ms[-1]), 1), "step_ms_median": round(float(np.median(ms)), 1),
                         "rtf": round(float(ms[-1]) / self.clock_ms, 3), "rtf_median": round(float(np.median(ms)) / self.clock_ms, 3),
                         "first_char_s": None if first_char is None else round(first_char, 2), "eot": eot, "resets": self.policy.reset_count, **self.gate.stats()}
+        if recovery is not None:
+            event["recovery"] = recovery
         # Native calls above may overlap a stop or replacement. Check and
         # enqueue under the same lock as the session transition.
         with self.lock:

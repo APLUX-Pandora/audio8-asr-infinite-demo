@@ -32,8 +32,6 @@ Open `http://<board-ip>:8765/`.
 | `A8_LANG` | en | transcription language at start-up (en / zh); the page switches it when a video is selected |
 | `A8_MODELS` | automatic discovery | explicit package root; must directly contain models.json; overridden by `--models` |
 | `AUDIO8_ASR_LIB` | the matched library inside the installed Python SDK | the .so to load |
-| `A8_RECOVER` | reset | soft-reset policy; `off` disables it |
-| `A8_RESET_AFTER_S` / `A8_RESET_QUIET_S` / `A8_RESET_BACKOFF_S` | 2 / 2 / 10 | soft-reset trigger parameters (`reset_policy.py`) |
 
 Requirements: complete the device prerequisites and SDK installation in the
 [main README](../README.md#1-install). Use a current Chrome, Edge or Firefox browser.
@@ -105,6 +103,11 @@ end-of-turn settings apply immediately and are stored in your browser only.
 
 ### Good to know
 
+- **Stream recovery.** The Web Demo checks for a quiet gap once the current stream has filled its rolling context.
+  Sound must return after about 1.8 seconds of quiet and at least 6 seconds without new text. The Demo then keeps
+  listening with the current stream for 1.28 seconds. If sustained, varying sound still produces no new text, it opens a
+  fresh stream and replays a short stretch of audio including the lead-in. Earlier captions stay on screen and the video
+  timeline continues.
 - **Rolling context.** The model keeps about 30 s of context. The server retains the latest 200 step timings and reset records, with a separate total reset count. Incoming audio can accumulate up to30seconds across the HTTP queue, silence gate and pending worker audio; moving audio into the worker does not reset that admission budget. The server queue also admits at most512 chunks. The browser allows at most5seconds/64 chunks waiting for upload. Exceeding either limit interrupts the recording and marks the transcript incomplete; audio is not silently skipped. Accumulated transcript text is separate from these audio limits.
 
 `POST /api/audio?sid=N` accepts up to32000bytes per request (one second of
@@ -146,7 +149,7 @@ alone does not identify a leak. Transcript retention is a separate allocation.
 |---|---|
 | `demo_server.py` | HTTP + SSE server: video list, audio from the page, upload / delete, audio clock and language switch, DRAM sampling |
 | `vad_gate.py` | Silero VAD start gate: only the non-speech before the first speech onset is replaced by silence |
-| `reset_policy.py` | Web soft-reset trigger policy; SDK diagnostic hooks are private |
+| `reset_policy.py` | Volume-based stall detection and short audio buffering for the Web session |
 | `static/index.html` | the page, including the audio capture |
 | `static/pcm-worklet.js` | 16 kHz PCM16 resampler, used by the AudioWorklet and by the page's fallback |
 | `media/` | built-in English synthetic-speech videos and their language tags (`<video>.json`) |

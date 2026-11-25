@@ -1,59 +1,89 @@
-"""Soft-reset trigger (business layer; the mechanism is ASRStream._soft_reset in the SDK).
+"""Bounded, per-recording audio recovery for the Web Demo."""
 
-Principle for long audio: never miss speech (noise turned into text is acceptable); the model and its decoding stay
-untouched. After a long non-speech stretch the model can stay on STREAMING_PAD for minutes although speech is back
-(the full-precision model does it too).
-Trigger: Silero reports a speech segment (vad_active, vad_onset_s) and, reset_after_s after its onset, there has been
-no output since (onset - reset_quiet_s). Action: ASRStream._soft_reset(onset - replay_pre_s): LM context back to the prefix,
-the cached audio rows from there (at most replay_max_s, an engine option) are replayed, then live audio continues.
-Limits: one reset per speech segment; after a reset that produced no output the next one waits backoff_s.
-"Output" = any token other than STREAMING_PAD.
-Call check() just before every feed of (at most) one audio clock, i.e. before the engine runs the next clock.
-"""
-import os
+from collections import deque
+
+import numpy as np
 
 
 class ResetPolicy:
-    def __init__(self, engine, enabled=None):
-        self.eng = engine
-        self.pad = engine._info["streaming_pad_id"]
-        self.enabled = (os.environ.get("A8_RECOVER", "reset") == "reset") if enabled is None else enabled
-        self.reset_after = float(os.environ.get("A8_RESET_AFTER_S", "2.0"))
-        self.reset_quiet = float(os.environ.get("A8_RESET_QUIET_S", "2.0"))
-        self.backoff = float(os.environ.get("A8_RESET_BACKOFF_S", "10"))
-        self.replay_pre = 0.5
-        self.reset()
+    """After a quiet gap, give the current stream time to resume before replaying."""
 
-    def reset(self):
-        """New session."""
-        self.next_t = None                  # audio time of the next clock's row (known once the first token is out)
-        self.last_text_t = -1e9             # row time of the newest non-PAD token
-        self.reset_onset, self.last_reset_t, self.backoff_until = None, None, -1e9
-        self.resets = []                    # last 200 {t, onset, replay_rows}; total is separate
+    QUIET_S = 1.76
+    NO_TEXT_S = 6.0
+    WAIT_S = 1.28
+    ACTIVE_POWER = 1e-5
+    LEAD_POWER = 1e-7
+
+    def __init__(self, rate, window, *, roll_s):
+        self.rate = rate
+        self.window = window
+        self.roll_samples = round(roll_s * rate)
+        self.resume_at = self.roll_samples
+        self.block = rate // 50  # 20 ms energy measurements
+        self.quiet_samples = round(self.QUIET_S * rate)
+        self.no_text_samples = round(self.NO_TEXT_S * rate)
+        self.wait_samples = round(self.WAIT_S * rate)
+        self.last_text_end = 0
+        self.quiet = 0
+        self.lead = None
+        self.pending = []
+        self.onset = 0
+        self.varying = 0
         self.reset_count = 0
+        self.resets = deque(maxlen=200)
 
-    def observe(self, tokens):
-        """Every token the engine returns (feed / soft_reset / finish)."""
-        for t in tokens:
-            if t.id != self.pad:
-                self.last_text_t = t.audio_t
-            self.next_t = t.audio_t + self.eng._clock_s
+    def observe(self, pcm, delta, end):
+        """Process a window only after the original stream has seen it."""
+        if delta.strip():
+            self.last_text_end = end
+            self.pending.clear()
+            self.quiet = 0
+            self.lead = None
+            return None
+        if not self.roll_samples or end <= self.resume_at or pcm.size != self.window:
+            return None
 
-    def check(self, vad_active, vad_onset_s):
-        """Soft-reset now if the trigger holds; returns the replayed tokens (already observed)."""
-        on, row_t = vad_onset_s, self.next_t
-        if not self.enabled or row_t is None or not vad_active or on is None or on == self.reset_onset:
-            return []
-        if row_t - on < self.reset_after or self.last_text_t > on - self.reset_quiet:
-            return []
-        if self.last_reset_t is not None and self.last_text_t < self.last_reset_t:     # previous reset brought no output
-            self.backoff_until = max(self.backoff_until, self.last_reset_t + self.backoff)
-        if row_t < self.backoff_until:
-            return []
-        self.reset_onset, self.last_reset_t = on, row_t
-        toks = self.eng._soft_reset(on - self.replay_pre)
-        self.observe(toks)
-        self.resets.append({"t": round(row_t, 2), "onset": round(on, 2), "replay_rows": len(toks)})
-        del self.resets[:-200]
+        power = np.mean(pcm.reshape(-1, self.block) ** 2, axis=1)
+        if power.mean() < self.ACTIVE_POWER:
+            self.pending.clear()
+            self.quiet = min(self.quiet + self.window, self.quiet_samples)
+            self.lead = pcm.copy()
+            return None
+        if not self.pending:
+            quiet, lead = self.quiet, self.lead
+            self.quiet, self.lead = 0, None
+            start = end - self.window
+            if quiet < self.quiet_samples or start - self.last_text_end < self.no_text_samples:
+                return None
+
+            self.onset = start
+            self.varying = 0
+            # Keep a quiet lead-in and any initial low-energy sound in the
+            # preceding window. All replay audio follows the last shown text.
+            lead_power = np.mean(lead.reshape(-1, self.block) ** 2, axis=1)
+            activity = np.flatnonzero(np.concatenate((lead_power, power)) >= self.LEAD_POWER)
+            first = max(0, int(activity[0]) - 1) * self.block
+            lead_in = np.concatenate((lead, pcm))[first:]
+            self.pending.append(lead_in)
+        else:
+            self.pending.append(pcm.copy())
+
+        # A knock will run out of active windows. Steady noise can be loud
+        # throughout, so require energy to vary in multiple windows as well.
+        self.varying += int(power.max() > 4 * power.min())
+        if end - self.onset < self.wait_samples:
+            return None
+        buffered = self.pending
+        self.pending = []
+        return np.concatenate(buffered) if self.varying >= 2 else None
+
+    def record(self, end, replay_samples):
+        # The new stream must fill its own rolling context before rearming.
+        self.resume_at = end - replay_samples + self.roll_samples
         self.reset_count += 1
-        return toks
+        self.resets.append({
+            "onset_s": round(self.onset / self.rate, 3),
+            "audio_s": round(end / self.rate, 3),
+            "replay_start_s": round((end - replay_samples) / self.rate, 3),
+        })
+        return self.resets[-1]
