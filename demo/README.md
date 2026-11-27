@@ -48,7 +48,7 @@ confirmation have time limits, so a failed connection produces an error instead 
 ## Using the page
 
 - **Audio file.** Choose the spoken language and click **Upload audio**. Pick a WAV, MP3, FLAC, M4A, AAC, Ogg or Opus file, up to 30 minutes and 256 MiB. Use the audio player to listen and click **Transcribe** to process the file from the beginning. Playback and transcription are independent. For a failed upload, correct the reported issue and choose the file again.
-- **Video.** Choose a built-in clip or upload a video with sound. Move the playhead if needed and click **Start**. Pause or resume playback to pause or resume transcription.
+- **Video.** The 10-minute English lecture **Beyond the README** is selected when you open the page. Click **Start** to play it with sound and see live captions. You can also upload a video with sound. Move the playhead before starting if needed. Pause or resume playback to pause or resume transcription.
 - **Microphone.** Choose **Live microphone** and the spoken language. Use a trusted HTTPS address, or forward the Demo port to the computer running the browser and open `http://localhost:8765/` there. Click **Start microphone** and grant access when prompted. Click **Stop** to finish.
 
 Use **Copy** or **Export** to save the transcript.
@@ -154,15 +154,14 @@ alone does not identify a leak. Transcript retention is a separate allocation.
 | `reset_policy.py` | Volume-based stall detection and short audio buffering for the Web session |
 | `static/index.html` | the page, including the audio capture |
 | `static/pcm-worklet.js` | 16 kHz PCM16 resampler, used by the AudioWorklet and by the page's fallback |
-| `media/` | built-in English synthetic-speech videos and their language tags (`<video>.json`) |
+| `media/` | built-in lecture and its language and attribution (`<video>.json`) |
 | `run.sh` | starts the server using the installed SDK and its packaged runtime |
 
 Uploaded videos are saved in `media/uploads/` (not committed).
 
-The built-in videos use original sample text and synthetic speech. See [media attribution](../docs/MEDIA_ATTRIBUTION.md).
-
-The README demonstration recording uses a separate, licensed FOSDEM 2025 talk excerpt by Lorna Mitchell,
-with attribution retained. See [source, license and changes](../docs/MEDIA_ATTRIBUTION.md).
+The built-in lecture is stored with Git LFS. If the video is missing in a checkout, install Git LFS and run
+`git lfs pull --include="demo/media/*.mp4"` from the Demo root.
+See [media attribution](../docs/MEDIA_ATTRIBUTION.md) for the lecture and the README demonstration recording.
 
 
 ## Optional hotwords

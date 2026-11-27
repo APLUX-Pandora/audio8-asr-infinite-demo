@@ -46,6 +46,8 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:disabled { opacity: .5; }
   #videoSel { max-width: 320px; }
+  .media-credit { margin: 0; color: var(--muted); font-size: 12px; }
+  .media-credit a { color: inherit; text-decoration: underline; }
   #upMsg { color: var(--muted); font-size: 12px; }
   #upMsg.err { color: var(--warn); }
   #longHint { color: var(--warn); font-size: 12px; display: none; }
@@ -142,13 +144,18 @@
 <main>
   <section class="panel stage">
     <div class="vidwrap">
-      <video id="video" aria-label="Video player" controls playsinline preload="auto"></video>
+      <video id="video" aria-label="Video player" controls playsinline preload="metadata"></video>
       <div id="audioPreview" class="media-preview" hidden>
         <span class="audio-symbol" aria-hidden="true">♫</span>
         <audio id="audioPlayer" aria-label="Audio player" controls preload="metadata"></audio>
       </div>
       <div id="micPreview" class="media-preview" hidden>Live microphone</div>
     </div>
+    <p id="lectureCredit" class="media-credit" hidden>
+      <span id="lectureByline"></span> ·
+      <a id="lectureSource" target="_blank" rel="noopener noreferrer">Source</a> ·
+      <a id="lectureLicense" target="_blank" rel="noopener noreferrer"></a>
+    </p>
     <div class="controls">
       <select id="videoSel" aria-label="Transcription source"></select>
       <button id="startBtn" class="primary">Start</button>
@@ -237,7 +244,7 @@
 
   <h3>1. Quick start</h3>
   <ol>
-    <li>Pick a built-in or uploaded video, an uploaded audio file, or <b>Live microphone</b> in the source list.</li>
+    <li>The English lecture <i>Beyond the README</i> is selected when you open the page. You can also upload a video or audio file, or choose <b>Live microphone</b>.</li>
     <li>Optionally move the playhead to where you want to begin (the button shows <b>Start at mm:ss</b>).</li>
     <li>Press <b>Start</b>. The video plays from that point with sound and the transcript appears on the right while it plays.</li>
     <li>Pause the video to pause the transcription; press play to continue. Press <b>Stop</b> to end the run.</li>
@@ -593,7 +600,7 @@ function failAudio(s, epoch, error) {
   stopInterruptedSession(s);
 }
 function onPcm(epoch, buf) {
-  if (epoch !== audioEpoch || !running || sid === null ||
+  if (epoch !== audioEpoch || !running || sid === null || audioFileSelected() ||
       (!microphoneSelected() && audioEndEpoch !== epoch && (video.paused || video.seeking))) return;
   const s = sid;
   if (audioQueuedBytes + buf.byteLength > MAX_AUDIO_QUEUE_BYTES || audioQueuedChunks >= MAX_AUDIO_QUEUE_CHUNKS) {
@@ -686,6 +693,15 @@ function curVideo() { return videos.find(v => v.id === $("videoSel").value); }
 function updateVideoUi() {
   const v = curVideo();
   $("delBtn").disabled = !v || v.builtin;
+  const attribution = v?.attribution;
+  $("lectureCredit").hidden = !attribution;
+  if (attribution) {
+    $("lectureByline").textContent = attribution.credit;
+    $("lectureSource").href = attribution.source;
+    const license = $("lectureLicense");
+    license.textContent = attribution.license;
+    license.href = attribution.license_url;
+  }
   const h = $("longHint");
   if (v && maxAudio && v.duration_s > maxAudio + 0.5) { h.textContent = `Only the first ${maxAudio} s of this file is transcribed.`; h.style.display = "inline"; }
   else h.style.display = "none";

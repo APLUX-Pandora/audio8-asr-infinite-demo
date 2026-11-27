@@ -286,9 +286,12 @@ class Session:
                         self.durs[p] = duration_s(p)
                     metadata = media_metadata(p)
                     lang = metadata.get("lang")
-                    out.append({"id": os.path.relpath(p, MEDIA), "name": metadata.get("name", f) if is_audio else f,
-                                "builtin": builtin, "duration_s": self.durs[p],
-                                "kind": "audio" if is_audio else "video", "lang": lang if lang in LANGS else "zh"})
+                    item = {"id": os.path.relpath(p, MEDIA), "name": metadata.get("name", f) if builtin or is_audio else f,
+                            "builtin": builtin, "duration_s": self.durs[p],
+                            "kind": "audio" if is_audio else "video", "lang": lang if lang in LANGS else "zh"}
+                    if builtin and "attribution" in metadata:
+                        item["attribution"] = metadata["attribution"]
+                    out.append(item)
         return out
 
     def sysmon(self):

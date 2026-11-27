@@ -45,9 +45,8 @@ OpenSSL 3.0.2-0ubuntu1.30 (libcrypto, statically linked in the native SDK)
 
 Demo media
 ----------
-The built-in Web Demo clips and examples/audio/speech.wav use original sample text,
-graphics and synthetic speech, distributed under Apache 2.0.
-The README recording includes an excerpt of Lorna Mitchell’s FOSDEM talk
+The SDK example audio uses original text and synthetic speech, distributed under Apache 2.0.
+The built-in Web Demo video and README recording include an excerpt of Lorna Mitchell’s FOSDEM talk
 “Beyond the README: Crafting a better developer experience for open source projects”
 under CC BY 2.0 Belgium (https://creativecommons.org/licenses/by/2.0/be/).
 See docs/MEDIA_ATTRIBUTION.md for the source, license and changes.

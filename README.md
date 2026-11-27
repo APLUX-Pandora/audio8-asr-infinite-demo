@@ -17,7 +17,7 @@ Recording includes Lorna Mitchell’s FOSDEM talk, [CC BY 2.0 BE](https://creati
 
 ## 1. Install
 
-Clone the Demo and enter its root directory:
+Install [Git LFS](https://git-lfs.com/) to download the built-in lecture, then clone the Demo and enter its root directory:
 
 ```bash
 git clone https://github.com/APLUX-Pandora/audio8-asr-infinite-demo.git
@@ -73,7 +73,8 @@ hf download APLUX-Pandora/Audio8-ASR-Infinite-160ms --local-dir models --include
 bash demo/run.sh --port 8765
 ```
 
-Open `http://<device-ip>:8765/` to choose a built-in video or upload audio or video.
+Open `http://<device-ip>:8765/`. The 10-minute English FOSDEM lecture **Beyond the README** is selected by default.
+Click **Start** to play it with sound and see live captions, or upload your own audio or video.
 For the live microphone, use HTTPS or open `http://localhost:8765/` on the computer running the browser after forwarding the port there.
 Stop the Demo with `Ctrl+C`. See the [Web Demo guide](demo/README.md#using-the-page).
 
@@ -104,7 +105,7 @@ More in the [Python API](sdk/PYTHON_API.md) and [examples](examples/README.md).
 - [Specialist options](docs/ASR_SPECIALIST_OPTIONS.md): advanced recognition parameters and full signatures
 - [SDK diagnostics](docs/SDK_DIAGNOSTICS.md): model metadata and resource inspection
 - [Model migration](docs/REAL_MODEL_MIGRATION.md): moving to the delivered model package layout
-- [Media attribution](docs/MEDIA_ATTRIBUTION.md): recording sources and licenses
+- [Media attribution](docs/MEDIA_ATTRIBUTION.md): lecture and recording sources and licenses
 
 ## License
 
