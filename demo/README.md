@@ -1,13 +1,12 @@
 # demo
 
-Board web demo: the browser plays a video and sends its sound to the board, the board transcribes it with the SDK
-engine, and the text comes back to the page over Server-Sent Events. The Help button on the page is the user manual.
+The Web Demo transcribes local audio uploads, videos and live microphone input with the Python SDK.
+The Help button opens the user manual.
 
-How the audio gets to the model: the page decodes the video's sound
-with Web Audio, resamples it to 16 kHz mono PCM16 (`static/pcm-worklet.js`; on a plain `http://` address, where browsers
+For videos and the microphone, the page captures sound with Web Audio and resamples it to 16 kHz mono PCM16 (`static/pcm-worklet.js`; on a plain `http://` address, where browsers
 do not offer AudioWorklet, the same resampler runs in a ScriptProcessorNode) and POSTs it in 100 ms chunks to
 `/api/audio`. Pausing the video pauses the transcription; seeking starts a fresh session at the new position. Keep the
-player unmuted: the page sends the sound it plays.
+video player unmuted during transcription. Audio uploads are decoded on the device and sent through the SDK's file transcription stream.
 
 ## Start
 
@@ -24,12 +23,12 @@ For background operation, use `setsid -f` before the launcher (and put the envir
 
 Each explicit root directly contains models.json. Without `--models`/`A8_MODELS`, a flat package or unique immediate child of checkout models/ is discovered. Multiple model roots require explicit selection. CLI `--models` overrides `A8_MODELS`; explicit relative paths use the caller's working directory. The service only offers clocks in the selected package; restart with the other root to change variants.
 
-Open `http://<board-ip>:8765/`.
+Open `http://<device-ip>:8765/` for videos and file uploads. For microphone access, see [Using the page](#using-the-page).
 
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `A8_CLOCK_MS` | the installed one (160 first) | audio clock at start-up: 160 or 80 ms; the page offers the installed clocks only |
-| `A8_LANG` | en | transcription language at start-up (en / zh); the page switches it when a video is selected |
+| `A8_LANG` | en | transcription language at start-up (en / zh); the page follows the selected source language |
 | `A8_MODELS` | automatic discovery | explicit package root; must directly contain models.json; overridden by `--models` |
 | `AUDIO8_ASR_LIB` | the matched library inside the installed Python SDK | the .so to load |
 
@@ -48,11 +47,11 @@ confirmation have time limits, so a failed connection produces an error instead 
 
 ## Using the page
 
-1. Pick a video in the list under the player.
-2. Optionally move the playhead to where you want to begin (the button then reads **Start at mm:ss**).
-3. Press **Start**. The video plays with sound and the transcript appears on the right while it plays.
-4. Pause the video to pause the transcription; play to continue. **Stop** ends the run.
-5. Take the text with **Copy** or **Export**.
+- **Audio file.** Choose the spoken language and click **Upload audio**. Pick a WAV, MP3, FLAC, M4A, AAC, Ogg or Opus file, up to 30 minutes and 256 MiB. Use the audio player to listen and click **Transcribe** to process the file from the beginning. Playback and transcription are independent. For a failed upload, correct the reported issue and choose the file again.
+- **Video.** Choose a built-in clip or upload a video with sound. Move the playhead if needed and click **Start**. Pause or resume playback to pause or resume transcription.
+- **Microphone.** Choose **Live microphone** and the spoken language. Use a trusted HTTPS address, or forward the Demo port to the computer running the browser and open `http://localhost:8765/` there. Click **Start microphone** and grant access when prompted. Click **Stop** to finish.
+
+Use **Copy** or **Export** to save the transcript.
 
 The **Help** button in the page header opens the same manual on the page.
 
@@ -60,22 +59,24 @@ The **Help** button in the page header opens the same manual on the page.
 
 | Control | What it does |
 |---|---|
-| Video list | Selects the video (name, duration, language, "built-in" for the shipped clips). Switching stops a running transcription. |
-| Start / Start at mm:ss | Plays the selected video from the playhead and starts a new transcription (clears the transcript and the statistics). |
-| Stop | Stops the transcription and pauses the video. |
-| Upload as Chinese / English | The language spoken in the video you are about to upload. Choose it before uploading. |
+| Source list | Selects an uploaded audio file, an uploaded or built-in video, or the live microphone. Switching stops the current transcription. |
+| Transcribe / Start at mm:ss / Start microphone | Starts a new transcript for the selected source and clears the previous result. |
+| Stop | Stops file transcription, pauses the video and stops its transcription, or finishes a microphone run. |
+| Upload as Chinese / English | The spoken language of a new upload or the microphone. |
 | Upload video | Uploads a video from your computer to the board; it is selected when the upload is done. Any length is accepted. MP4 (H.264 + AAC) plays in every browser. |
-| Delete | Deletes the selected uploaded video. Built-in videos cannot be deleted. |
-| Player | Pause / play pauses / resumes the transcription. Moving the playhead during a run continues the transcription from the new position; the transcript is kept and a "jumped to mm:ss" line marks the jump. |
-| Timestamps | Each paragraph starts with its video time, e.g. `[42:10]`. Click it to play from there. |
+| Upload audio | Uploads and selects an audio file. The player shows a music icon and audio controls. |
+| Delete | Deletes the selected upload. Built-in videos are protected. |
+| Player | Controls playback. During video transcription, pause and play also pause and resume transcription. Seeking during a video run keeps the transcript and adds a "jumped to mm:ss" line. |
+| Timestamps | In video mode, each paragraph starts with its video time, e.g. `[42:10]`. Click it to play from there. |
 | Audio clock | The model emits one text token per audio clock: **160 ms** (default, less compute, more headroom) or **80 ms** (text about 0.1 s sooner, twice the compute). Only installed clocks can be chosen. Changing it reloads the models (about 2 s). |
 | Silence gate | On by default: until the first speech of a run, the audio is replaced by silence, so applause or noise before the speaker starts does not produce stray words. After the first speech nothing is changed. |
 | Copy / Export / Clear | Copy the transcript, download it as a text file, or clear the displayed text (a running transcription continues). |
 
-The transcription language belongs to the video: built-in videos have a fixed language, uploads use the language
-chosen at upload. Selecting a video switches the models to its language (about 2 s when it changes).
+Built-in videos have a fixed language. Audio and video uploads use the language chosen at upload. Selecting a source switches the model language when needed.
 
 ### VAD settings
+
+The silence gate and end-of-turn metrics apply to video and microphone transcription. Audio files show incremental text, first-word time and final audio duration.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -121,8 +122,9 @@ uses its existing incomplete-transcript/session-stop recovery path.
 On normal video EOF the browser flushes its resampler, including a final
 partial PCM16 chunk, before sending `/api/end`. AudioWorklet waits for an
 epoch-matched flush acknowledgement after all capture buffers; the fallback
-resampler flushes synchronously. The final interpolation sample is held only
-for its remaining source duration, without rounding to a full100ms chunk.
+resampler flushes synchronously. Both capture paths apply a low-pass filter
+when downsampling microphone input. Flushing retains the last partial chunk
+within the captured audio duration.
 A5s capture-flush timeout marks the transcript incomplete. Seek/stop invalidates
 the old flush; repeated EOF in the same epoch does not send a second end.
 
@@ -218,7 +220,7 @@ and owns signal handling and cleanup. A pending stop is processed after the mode
 owner is assigned. This policy belongs to the executable application; the installed
 Python/C SDK does not alter a developer application's masks or handlers.
 
-### Uploaded video metadata
+### Uploaded media metadata
 
 Each new upload owns a sidecar named after its complete filename, for example
 `cross.mp4.json` and `cross.mov.json`. Concurrent uploads reserve both names

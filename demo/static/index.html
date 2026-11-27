@@ -36,6 +36,10 @@
   .stage { grid-area: stage; display: flex; flex-direction: column; gap: 10px; }
   .vidwrap { flex: 1; min-height: 0; background: #000; border-radius: 8px; overflow: hidden; display: flex; }
   video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .media-preview { width: 100%; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--muted); }
+  .media-preview[hidden] { display: none; }
+  .audio-symbol { font-size: 64px; color: var(--accent); line-height: 1; }
+  .media-preview audio { width: min(300px, 80vw); }
   .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: none; }
   .controls label { color: var(--muted); font-size: 12px; }
   select, button, input[type=number], textarea { background: #0f1115; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font: inherit; }
@@ -137,20 +141,29 @@
 </header>
 <main>
   <section class="panel stage">
-    <div class="vidwrap"><video id="video" controls playsinline preload="auto"></video></div>
+    <div class="vidwrap">
+      <video id="video" aria-label="Video player" controls playsinline preload="auto"></video>
+      <div id="audioPreview" class="media-preview" hidden>
+        <span class="audio-symbol" aria-hidden="true">♫</span>
+        <audio id="audioPlayer" aria-label="Audio player" controls preload="metadata"></audio>
+      </div>
+      <div id="micPreview" class="media-preview" hidden>Live microphone</div>
+    </div>
     <div class="controls">
-      <select id="videoSel"></select>
+      <select id="videoSel" aria-label="Transcription source"></select>
       <button id="startBtn" class="primary">Start</button>
       <button id="stopBtn">Stop</button>
       <button id="reloadBtn" class="primary" hidden>Reload model</button>
-      <select id="upLang" title="Language spoken in the video you upload">
+      <select id="upLang" title="Language spoken in the upload or live microphone">
         <option value="zh">Upload as Chinese</option>
         <option value="en">Upload as English</option>
       </select>
       <button id="upBtn">Upload video</button>
+      <button id="upAudioBtn">Upload audio</button>
       <button id="delBtn">Delete</button>
       <input id="upFile" type="file" accept="video/*,.mkv" hidden>
-      <span id="upMsg"></span>
+      <input id="upAudioFile" type="file" accept=".wav,.mp3,.flac,.m4a,.aac,.ogg,.opus" hidden>
+      <span id="upMsg" role="status"></span>
     </div>
     <div class="controls">
       <label for="clockSel">Audio clock</label>
@@ -224,16 +237,18 @@
 
   <h3>1. Quick start</h3>
   <ol>
-    <li>Pick a video in the video list (left, under the player).</li>
+    <li>Pick a built-in or uploaded video, an uploaded audio file, or <b>Live microphone</b> in the source list.</li>
     <li>Optionally move the playhead to where you want to begin (the button shows <b>Start at mm:ss</b>).</li>
     <li>Press <b>Start</b>. The video plays from that point with sound and the transcript appears on the right while it plays.</li>
     <li>Pause the video to pause the transcription; press play to continue. Press <b>Stop</b> to end the run.</li>
+    <li>For audio files, choose the spoken language, click <b>Upload audio</b>, and pick a file. Use the audio player to listen and <b>Transcribe</b> to process the entire file.</li>
+    <li>For the microphone, choose the spoken language, click <b>Start microphone</b>, and grant browser permission. Click <b>Stop</b> when finished. Microphone access requires HTTPS or localhost.</li>
     <li>Use <b>Copy</b> or <b>Export</b> (top right of the transcript) to take the text.</li>
   </ol>
 
   <h3>2. Screen layout</h3>
   <ul>
-    <li><b>Top left</b> – video player and the controls.</li>
+    <li><b>Top left</b> – source, player and controls.</li>
     <li><b>Top right</b> – live transcript. The newest words appear in light blue and settle to white.</li>
     <li><b>Bottom bar</b> – live metrics: run statistics, Silero VAD, board DRAM, RTF and end of turn.</li>
     <li><b>Header</b> – current audio clock and context mode, model load time, run state (Ready / Transcribing / Done / Stopped).</li>
@@ -242,15 +257,16 @@
   <h3>3. Controls</h3>
   <table>
     <tr><th>Control</th><th>What it does</th><th>Takes effect</th></tr>
-    <tr><td>Video list</td><td>Selects the video to play (name, duration, "built-in" for the shipped clips). Switching stops a running transcription.</td><td>Immediately</td></tr>
+    <tr><td>Source list</td><td>Selects a built-in or uploaded video, uploaded audio or live microphone. Switching stops a running transcription.</td><td>Immediately</td></tr>
     <tr><td>Start at mm:ss</td><td>Plays the selected video from the current playhead position (0:00 when it is at the end) and starts a new transcription (clears the transcript and statistics).</td><td>Immediately</td></tr>
     <tr><td>Stop</td><td>Stops the transcription and pauses the video.</td><td>Immediately</td></tr>
     <tr><td>Upload video</td><td>Uploads a video from your computer to the board; the progress is shown next to the buttons, then the new video is selected. Any length is accepted. MP4 (H.264 + AAC) plays in every browser; other formats depend on your browser.</td><td>After the upload</td></tr>
-    <tr><td>Delete</td><td>Deletes the selected uploaded video from the board (asks first). Built-in videos cannot be deleted.</td><td>Immediately</td></tr>
+    <tr><td>Upload audio</td><td>Uploads WAV, MP3, FLAC, M4A, AAC, Ogg or Opus audio, up to 30 minutes and 256 MiB per file. The selected upload appears with an audio player. Transcription uses the file from the beginning, regardless of playback position.</td><td>After the upload</td></tr>
+    <tr><td>Delete</td><td>Deletes the selected upload from the board (asks first). Built-in videos are protected.</td><td>Immediately</td></tr>
     <tr><td>Player controls</td><td>Pause / play pauses / resumes the transcription. Moving the playhead during a run continues the transcription from the new position (0.3 s after you stop dragging); the transcript is kept and a "— jumped to mm:ss —" line marks the jump. The page itself sends the sound it plays to the board, so keep the player unmuted.</td><td>Immediately</td></tr>
     <tr><td>Timestamps</td><td>Each paragraph starts with its video time, e.g. [42:10]. Click it to play from there (during a run the transcription continues from that point).</td><td>Immediately</td></tr>
     <tr><td>Audio clock</td><td>The model emits one text token per audio clock. <b>160 ms</b> (default): less compute per second of audio, more headroom. <b>80 ms</b>: text about 0.1 s sooner, twice the compute. Both use a 480 ms transcription delay. Only the clocks whose model package is installed on the board can be chosen.</td><td>Reloads the models (≈2 s, a loading screen is shown)</td></tr>
-    <tr><td>Language</td><td>The transcription language belongs to the video (EN / ZH in the video list): built-in videos are fixed, for an upload pick "Upload as Chinese / English" before uploading. Selecting a video switches the models to its language automatically.</td><td>On video selection (≈2 s loading screen when the language changes)</td></tr>
+    <tr><td>Language</td><td>Built-in videos have a fixed language. Pick "Upload as Chinese / English" for an upload or live microphone. The model follows the selected source language.</td><td>On video selection (≈2 s loading screen when the language changes)</td></tr>
     <tr><td>Silence gate</td><td>On (default): until the first speech of a run, the audio is replaced by silence, so applause or noise before the speaker starts does not produce stray words. After the first speech nothing is changed.</td><td>Immediately</td></tr>
     <tr><td>Copy / Export / Clear</td><td>Copy the transcript, download it as <i>&lt;video&gt;_transcript.txt</i>, or clear the displayed text (a running transcription continues).</td><td>Immediately</td></tr>
   </table>
@@ -297,7 +313,7 @@
     <tr><td>"Incomplete" after an audio delivery failure</td><td>Playback stops on a network error, failed HTTP request or 10-second request timeout. Reconnect, seek to before the interruption and press Start for a new transcription. Copied/downloaded text is marked incomplete until then.</td></tr>
     <tr><td>"Model failed" or model reload failed</td><td>The transcript is incomplete and Start is disabled. Read the error, click Reload model and wait. If loading fails, fix the reported model/runtime problem and retry. Successful loading keeps playback paused and preserves the previous transcript; seek to before the failure and press Start for a new transcription.</td></tr>
     <tr><td>No sound</td><td>Check the browser / system volume and the player's volume control; press Start again.</td></tr>
-    <tr><td>Upload failed: no audio track</td><td>The file has no audio; use a video with sound, preferably MP4 (H.264 + AAC).</td></tr>
+    <tr><td>Upload failed</td><td>Check the reported format, size or decoding error, then choose a valid file and upload again. For video, use a clip with sound, preferably MP4 (H.264 + AAC).</td></tr>
     <tr><td>No text while the video plays</td><td>The page sends the sound it plays to the board: keep the player unmuted with some volume.</td></tr>
     <tr><td>Video does not play after upload</td><td>Your browser cannot decode the format; convert it to MP4 (H.264 + AAC).</td></tr>
     <tr><td>Model load failed after an audio clock / language change</td><td>The previous setting is restored when possible. If the model remains failed, use Reload model; Start stays disabled until loading succeeds.</td></tr>
@@ -309,7 +325,10 @@
 <script src="/pcm-worklet.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const video = $("video"), tr = $("transcript");
+const video = $("video"), audioPlayer = $("audioPlayer"), tr = $("transcript");
+const MICROPHONE_ID = "@microphone";
+const microphoneSelected = () => $("videoSel").value === MICROPHONE_ID;
+const audioFileSelected = () => curVideo()?.kind === "audio";
 let sid = null, running = false, clockTimer = null, text = "", maxAudio = null, restarting = false;
 let videos = [], lang = "en", clock = null;
 const EOT_COLORS = ["#f47067", "#f0b429", "#4f8cff", "#a371f7"];
@@ -399,14 +418,19 @@ function copyText() {
 function downloadText() {
   const t = transcriptText(); if (!t) return;
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([t + "\n"], { type: "text/plain" }));
-  a.download = ($("videoSel").value || "transcript").split("/").pop().replace(/\.[^.]+$/, "") + "_transcript.txt"; a.click();
+  const name = curVideo()?.name || (microphoneSelected() ? "microphone" : "transcript");
+  a.download = name.replace(/\.[^.]+$/, "") + "_transcript.txt"; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 function setState(s, label) {
   const el = $("state"); el.className = "chip " + s; el.textContent = label;
 }
 function resetTranscript(keepText) {
-  if (!keepText) { text = ""; tr.innerHTML = '<span class="cursor"></span>'; }
+  if (!keepText) {
+    text = ""; tr.innerHTML = '<span class="cursor"></span>';
+    microphoneInterrupted = false;
+    fileLimitReached = false;
+  }
   needStamp = true;
   $("notice").style.display = "none";
   ["sAudio", "sFirst", "sStep", "sWords", "vadState", "vadGated"].forEach(k => $(k).textContent = "-");
@@ -451,6 +475,21 @@ async function post(url, body, signal) {
 // ScriptProcessorNode instead.
 let audioCtx = null, pcmNode = null, audioEpoch = 0, sendChain = Promise.resolve(), pcmReset = null;
 let pcmFlush = null, pcmFlushPending = null, audioEndEpoch = -1;
+const FILE_LIMIT_MESSAGE = "The model reached its transcription limit.";
+let fileLimitReached = false;
+const MICROPHONE_INTERRUPTION = "The microphone was disconnected or access was revoked.";
+let microphoneStream = null, microphoneSource = null, microphoneOnEnded = null;
+let microphoneInterrupted = false;
+function stopMicrophone() {
+  if (microphoneSource) microphoneSource.disconnect();
+  if (microphoneStream) {
+    for (const track of microphoneStream.getTracks()) {
+      track.removeEventListener("ended", microphoneOnEnded);
+      track.stop();
+    }
+  }
+  microphoneSource = microphoneStream = microphoneOnEnded = null;
+}
 let audioController = new AbortController(), transportFailure = null;
 let engineError = null, engineReloading = false, inferenceFailure = null;
 const AUDIO_REQUEST_TIMEOUT_MS = 10000;
@@ -459,8 +498,9 @@ const MAX_AUDIO_QUEUE_CHUNKS = 64;
 let audioQueuedBytes = 0, audioQueuedChunks = 0;
 function transcriptText() {
   const value = text.trim();
-  const failure = inferenceFailure || transportFailure;
-  return value && failure ? `[INCOMPLETE: ${failure.message}]\n${value}` : value;
+  const reason = (inferenceFailure || transportFailure)?.message ||
+    (microphoneInterrupted ? MICROPHONE_INTERRUPTION : fileLimitReached ? FILE_LIMIT_MESSAGE : "");
+  return value && reason ? `[INCOMPLETE: ${reason}]\n${value}` : value;
 }
 function engineControls() {
   $("startBtn").disabled = !!engineError || engineReloading || switching;
@@ -541,19 +581,20 @@ async function stopInterruptedSession(s) {
 }
 function failAudio(s, epoch, error) {
   if (epoch !== audioEpoch || s !== sid || transportFailure) return;
-  transportFailure = { sid: s, message: `Audio delivery interrupted (${error.message || String(error)}).` };
+  const mode = audioFileSelected() ? "File transcription" : microphoneSelected() ? "Microphone transcription" : "Audio delivery";
+  transportFailure = { sid: s, message: `${mode} interrupted (${error.message || String(error)}).` };
   running = false; sid = null; restarting = false;
   video.pause(); clearInterval(clockTimer); clearTimeout(seekTimer);
   newAudioEpoch();                         // abort the in-flight request and invalidate every queued audio block
   setState("", "Incomplete");
   const notice = $("notice"); notice.style.display = "block";
-  notice.textContent = `${transportFailure.message} This transcript is incomplete. Seek to before the interruption and press Start for a new transcription.`;
+  notice.textContent = `${transportFailure.message} This transcript is incomplete. ${audioFileSelected() ? "Press Transcribe to retry." : "Press Start for a new transcription."}`;
   upMsg(transportFailure.message, true);
   stopInterruptedSession(s);
 }
 function onPcm(epoch, buf) {
   if (epoch !== audioEpoch || !running || sid === null ||
-      (audioEndEpoch !== epoch && (video.paused || video.seeking))) return;
+      (!microphoneSelected() && audioEndEpoch !== epoch && (video.paused || video.seeking))) return;
   const s = sid;
   if (audioQueuedBytes + buf.byteLength > MAX_AUDIO_QUEUE_BYTES || audioQueuedChunks >= MAX_AUDIO_QUEUE_CHUNKS) {
     failAudio(s, epoch, new Error("Audio upload cannot keep up with playback; queued audio limit reached"));
@@ -584,7 +625,7 @@ async function ensureAudio() {
       if (e.data.flushed) finishPcmFlush(e.data.epoch);
       else onPcm(e.data.epoch, e.data.buffer);
     };
-    pcmReset = ep => pcmNode.port.postMessage({ epoch: ep });
+    pcmReset = (ep, antialias) => pcmNode.port.postMessage({ epoch: ep, antialias });
     pcmFlush = ep => new Promise((resolve, reject) => {
       pcmFlushPending = { epoch: ep, resolve, reject,
         timer: setTimeout(() => finishPcmFlush(ep, new Error("Audio capture flush timed out")), 5000) };
@@ -598,7 +639,7 @@ async function ensureAudio() {
       const chs = []; for (let c = 0; c < e.inputBuffer.numberOfChannels; c += 1) chs.push(e.inputBuffer.getChannelData(c));
       rs.push(chs);
     };
-    pcmReset = ep => { epoch = ep; rs.reset(); };
+    pcmReset = (ep, antialias) => { epoch = ep; rs.reset(antialias); };
     pcmFlush = ep => {
       if (ep !== epoch) return Promise.reject(new Error("Audio capture epoch changed"));
       rs.flush();
@@ -615,20 +656,21 @@ function finishPcmFlush(epoch, error = null) {
   if (error) pending.reject(error); else pending.resolve();
 }
 function newAudioEpoch() {                        // drop audio captured before a start / seek
+  stopMicrophone();
   finishPcmFlush(audioEpoch, new Error("Audio capture epoch changed"));
   audioController.abort(); audioController = new AbortController();
   audioEpoch += 1;
   audioEndEpoch = -1;
   audioQueuedBytes = 0; audioQueuedChunks = 0;
   sendChain = Promise.resolve();
-  if (pcmReset) pcmReset(audioEpoch);
+  if (pcmReset) pcmReset(audioEpoch, microphoneSelected());
 }
 async function sendEnd() {
   const s = sid, epoch = audioEpoch;
   if (s === null || audioEndEpoch === epoch) return;
   audioEndEpoch = epoch;  // Accept queued worklet/tail buffers after video.ended pauses the player.
   try {
-    if (pcmFlush) await pcmFlush(epoch);
+    if (!audioFileSelected() && pcmFlush) await pcmFlush(epoch);
     await sendChain;      // All capture buffers must be acknowledged before declaring EOF.
     if (epoch !== audioEpoch || s !== sid || transportFailure) return;
     await audioRequest("/api/end", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -645,43 +687,85 @@ function updateVideoUi() {
   const v = curVideo();
   $("delBtn").disabled = !v || v.builtin;
   const h = $("longHint");
-  if (v && maxAudio && v.duration_s > maxAudio + 0.5) { h.textContent = `Only the first ${maxAudio} s of this video is transcribed.`; h.style.display = "inline"; }
+  if (v && maxAudio && v.duration_s > maxAudio + 0.5) { h.textContent = `Only the first ${maxAudio} s of this file is transcribed.`; h.style.display = "inline"; }
   else h.style.display = "none";
 }
 async function loadVideos(select) {
-  const d = await (await fetch("/api/videos")).json();
-  videos = d.videos;
-  $("videoSel").innerHTML = videos.map(v => `<option value="${v.id}">${v.name}${v.duration_s ? " (" + fmtDur(v.duration_s) + ")" : ""} · ${v.lang === "en" ? "EN" : "ZH"}${v.builtin ? " · built-in" : ""}</option>`).join("");
-  const keep = select || (videos.find(v => v.id === video.dataset.id) || {}).id || (videos[0] || {}).id;
-  if (keep) { $("videoSel").value = keep; setVideo(keep); }
-  updateVideoUi(); ensureLang();
+  const response = await fetch("/api/videos", {cache: "no-store"});
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  videos = (await response.json()).videos;
+  const list = $("videoSel");
+  const previous = list.value;
+  list.replaceChildren(...videos.map(v => new Option(
+    `${v.name}${v.duration_s ? " (" + fmtDur(v.duration_s) + ")" : ""} · ${v.lang.toUpperCase()}${v.builtin ? " · built-in" : ""}`, v.id
+  )), new Option("Live microphone", MICROPHONE_ID));
+  const keep = select || (Array.from(list.options).some(option => option.value === previous) ? previous : list.value);
+  list.value = keep;
+  updateSource();
 }
 function setVideo(id) {
   if (video.dataset.id === id) return;
-  video.dataset.id = id; video.src = "/media/" + encodeURI(id);
+  video.dataset.id = id;
+  const audio = audioFileSelected(), mic = microphoneSelected();
+  video.hidden = audio || mic;
+  $("audioPreview").hidden = !audio;
+  $("micPreview").hidden = !mic;
+  const url = "/media/" + id.split("/").map(encodeURIComponent).join("/");
+  if (audio) audioPlayer.src = url;
+  else if (audioPlayer.hasAttribute("src")) {
+    audioPlayer.removeAttribute("src");
+    audioPlayer.load();
+  }
+  if (!video.hidden) video.src = url;
+  else if (video.hasAttribute("src")) {
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+function updateSource() {
+  const selected = $("videoSel").value;
+  if (video.dataset.id !== selected) {
+    if (running || restarting) stop().catch(error => upMsg(error.message, true));
+    setVideo(selected);
+  }
+  updateVideoUi();
+  updateStartLabel();
+  ensureLang();
 }
 function upMsg(t, err) { const m = $("upMsg"); m.textContent = t; m.className = err ? "err" : ""; }
+let uploading = false;
 function upload(file) {
-  if (running) stop();
+  if (uploading) return;
+  uploading = $("upBtn").disabled = $("upAudioBtn").disabled = true;
+  const finishUpload = () => { uploading = $("upBtn").disabled = $("upAudioBtn").disabled = false; };
   const xhr = new XMLHttpRequest();
   xhr.open("PUT", "/api/upload?name=" + encodeURIComponent(file.name) + "&lang=" + $("upLang").value);
   xhr.upload.onprogress = e => { if (e.lengthComputable) upMsg(`Uploading ${Math.round(100 * e.loaded / e.total)}%`); };
-  xhr.upload.onload = () => upMsg("Checking the audio track…");
+  xhr.upload.onload = () => upMsg("Checking the media file…");
   xhr.onload = async () => {
-    let r = {}; try { r = JSON.parse(xhr.responseText); } catch (e) {}
-    if (xhr.status !== 200) { upMsg("Upload failed: " + (r.error || xhr.status), true); return; }
-    await loadVideos(r.id); upMsg(`Uploaded ${r.id.split("/").pop()}`); setTimeout(() => upMsg(""), 4000);
+    try {
+      const result = JSON.parse(xhr.responseText);
+      if (xhr.status !== 200) throw new Error(result.error || `HTTP ${xhr.status}`);
+      await loadVideos(result.id);
+      upMsg(`Uploaded ${videos.find(v => v.id === result.id)?.name || file.name}`);
+    } catch (error) { upMsg("Upload failed: " + error.message, true); }
+    finally { finishUpload(); }
   };
-  xhr.onerror = () => upMsg("Upload failed (network)", true);
+  xhr.onerror = xhr.onabort = () => {
+    upMsg("Upload failed (network). Choose the file to retry.", true);
+    finishUpload();
+  };
   upMsg("Uploading 0%"); xhr.send(file);
 }
 async function delVideo() {
   const v = curVideo(); if (!v || v.builtin) return;
   if (!confirm(`Delete ${v.name} from the board?`)) return;
-  if (running) await stop();
-  const r = await post("/api/delete", { video: v.id });
-  if (r.error) { upMsg(r.error, true); return; }
-  video.dataset.id = ""; await loadVideos();
+  try {
+    if (running || restarting) await stop();
+    const r = await post("/api/delete", { video: v.id });
+    if (r.error) throw new Error(r.error);
+    await loadVideos();
+  } catch (error) { upMsg(error.message, true); }
 }
 function showOverlay(on, msg) { $("overlay").classList.toggle("on", on); if (msg) $("ovMsg").textContent = msg; }
 let switching = false, switchTimer = null, switchEpoch = 0;
@@ -736,45 +820,80 @@ async function configureTo(c, l) {
       finishSwitch("Could not change model configuration: " + (error.message || String(error)));
   } finally { clearTimeout(timer); }
 }
-function ensureLang() {                            // the transcription language follows the selected video
-  const v = curVideo();
-  if (v && clock && v.lang !== lang) configureTo(clock, v.lang);
+function ensureLang() {
+  const wanted = microphoneSelected() ? $("upLang").value : curVideo()?.lang;
+  if (wanted && clock && wanted !== lang) configureTo(clock, wanted);
 }
 function startPos() { return (video.ended || !isFinite(video.duration) || video.duration - video.currentTime < 1) ? 0 : video.currentTime; }
-function updateStartLabel() { $("startBtn").textContent = `Start at ${fmtT(startPos())}`; }
+function updateStartLabel() {
+  $("startBtn").textContent = audioFileSelected() ? "Transcribe" :
+    microphoneSelected() ? "Start microphone" : `Start at ${fmtT(startPos())}`;
+}
 function hotwordOptions() {
   const words = $("hotwordEnabled").checked ? $("hotwordWords").value.split(/[,，\n]/).map(s => s.trim()).filter(Boolean) : [];
   return {words, top_k: Number($("hotwordTopK").value), start_boost: Number($("hotwordStart").value),
           continuation_boost: Number($("hotwordContinuation").value)};
 }
 async function start() {
-  if (engineError || engineReloading || restarting || switching) return;
+  if (engineError || engineReloading || restarting || switching || (running && microphoneInterrupted)) return;
   restarting = true;
-  const off = startPos();
-  video.pause(); if (off === 0) video.currentTime = 0;
+  const file = audioFileSelected(), mic = microphoneSelected(), source = $("videoSel").value;
+  const off = file || mic ? 0 : startPos();
+  video.pause(); if (!file && !mic && off === 0) video.currentTime = 0;
   running = false; sid = null; newAudioEpoch();
   const epoch = audioEpoch;
   transportFailure = null; inferenceFailure = null; upMsg("");
   resetTranscript(false);
   try {
+    if (mic) {
+      if (!navigator.mediaDevices?.getUserMedia)
+        throw new Error("Microphone access requires HTTPS or localhost");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (epoch !== audioEpoch) { stream.getTracks().forEach(track => track.stop()); return; }
+      microphoneStream = stream;
+      microphoneOnEnded = () => {
+        if (epoch !== audioEpoch || microphoneStream !== stream) return;
+        stopMicrophone();
+        if (!running) return; // Start will report the lost track when its pending request returns.
+        microphoneInterrupted = true;
+        setState("running", "Finishing");
+        const notice = $("notice");
+        notice.style.display = "block";
+        notice.textContent = `${MICROPHONE_INTERRUPTION} Finishing the audio already captured.`;
+        sendEnd();
+      };
+      const tracks = stream.getAudioTracks();
+      for (const track of tracks) track.addEventListener("ended", microphoneOnEnded);
+      if (!tracks.length || tracks.some(track => track.readyState === "ended"))
+        throw new Error(MICROPHONE_INTERRUPTION);
+      await ensureAudio();
+      if (epoch !== audioEpoch) return;
+      if (!microphoneStream) throw new Error(MICROPHONE_INTERRUPTION);
+    }
     const response = await audioRequest("/api/start", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video: $("videoSel").value, offset_s: off, hotwords: hotwordOptions() }) });
+      body: JSON.stringify({ video: source, offset_s: off, hotwords: hotwordOptions(),
+                             microphone_lang: mic ? $("upLang").value : undefined }) });
     const r = await response.json();
     if (epoch !== audioEpoch) return;
     if (r.error) throw new Error(r.error);
     sid = r.sid;
-    await ensureAudio();
+    if (mic && !microphoneStream) throw new Error(MICROPHONE_INTERRUPTION);
+    if (!file && !mic) await ensureAudio();
     if (epoch !== audioEpoch) return;
-    if (pcmReset) pcmReset(audioEpoch);
+    if (!file && pcmReset) pcmReset(audioEpoch, mic);
     running = true;
     setState("running", "Transcribing");
-    await video.play();
+    if (file) await sendEnd();
+    else if (mic) {
+      microphoneSource = audioCtx.createMediaStreamSource(microphoneStream);
+      microphoneSource.connect(pcmNode);
+    } else await video.play();
   } catch (error) { failAudio(sid, epoch, error); }
   finally { if (epoch === audioEpoch) restarting = false; }
 }
 async function stop(signal) {
   const s = sid;
-  running = false; restarting = false; clearInterval(clockTimer); sid = null;
+  running = false; restarting = false; clearInterval(clockTimer); clearTimeout(seekTimer); sid = null;
   video.pause(); newAudioEpoch();
   if (s !== null) {
     setState("", "Stopped");
@@ -814,10 +933,22 @@ $("copyBtn").onclick = copyText;
 $("dlBtn").onclick = downloadText;
 $("clearBtn").onclick = () => { text = ""; tr.innerHTML = '<span class="cursor"></span>'; needStamp = true; };
 window.addEventListener("resize", () => { redrawDram(); redrawRtf(); redrawEot(); });
-$("stopBtn").onclick = () => stop();
-$("videoSel").onchange = () => { if (running) stop(); setVideo($("videoSel").value); updateVideoUi(); ensureLang(); };
-$("upBtn").onclick = () => $("upFile").click();
-$("upFile").onchange = () => { const f = $("upFile").files[0]; $("upFile").value = ""; if (f) upload(f); };
+$("stopBtn").onclick = () => {
+  if (microphoneSelected() && running) { stopMicrophone(); sendEnd(); }
+  else stop().catch(error => upMsg(error.message, true));
+};
+$("videoSel").onchange = updateSource;
+$("upLang").onchange = () => { if (microphoneSelected()) ensureLang(); };
+function bindUpload(button, input) {
+  $(button).onclick = () => $(input).click();
+  $(input).onchange = () => {
+    const file = $(input).files[0];
+    $(input).value = "";
+    if (file) upload(file);
+  };
+}
+bindUpload("upBtn", "upFile");
+bindUpload("upAudioBtn", "upAudioFile");
 $("delBtn").onclick = delVideo;
 $("clockSel").onchange = () => configureTo($("clockSel").value, lang);
 $("vadChk").onchange = () => post("/api/vad", { enabled: $("vadChk").checked });
@@ -833,7 +964,7 @@ function handleEvent(ev) {
   if (ev.type === "info" && ev.state === "error") { failInference(ev.engine_error); return; }
   if (ev.type === "info" && ev.state === "reload") {
     if (ev.engine_error) engineError = ev.engine_error;
-    running = false; video.pause();
+    running = false; video.pause(); newAudioEpoch();
     if (!switching) watchSwitch(beginSwitch(ev.clock_ms, ev.lang));
     return;
   }
@@ -867,7 +998,8 @@ function handleEvent(ev) {
     $("cfg").textContent = `${ev.lang.toUpperCase()} · ${ev.clock_ms} ms clock · ${ev.delay_ms} ms delay`;
     $("foot").textContent = ev.roll_s ? `${ev.clock_ms} ms clock · unlimited length (rolling ${ev.roll_s} s context) · model load ${ev.init_s} s`
                                       : `${ev.clock_ms} ms clock · up to ${ev.max_audio_s} s of audio per run · model load ${ev.init_s} s`;
-    if (transportFailure) setState("", "Incomplete");
+    if (transportFailure || fileLimitReached) setState("", "Incomplete");
+    else if (microphoneInterrupted) setState(running ? "running" : "", running ? "Finishing" : "Incomplete");
     else setState(ev.state === "running" ? "running" : "", ev.state === "running" ? "Transcribing" : "Ready");
     if (recovered) {
       upMsg("Model reloaded. Press Start when ready.");
@@ -878,9 +1010,9 @@ function handleEvent(ev) {
     if (ev.resets > resetsSeen) { resetsSeen = ev.resets; if (text.trim()) paraPending = true; }   // soft reset = after a long gap: new paragraph
     if (paraDue !== null && ev.tokens >= paraDue) { paraDue = null; if (text.trim()) paraPending = true; }
     appendPiece(ev.piece, ev.t_first);
-    $("sAudio").textContent = fmtT(ev.audio_s);
-    $("sStep").textContent = ev.step_ms_median.toFixed(0) + " ms";
-    if (ev.first_char_s !== null) $("sFirst").textContent = ev.first_char_s.toFixed(2) + " s";
+    if (ev.audio_s != null) $("sAudio").textContent = fmtT(ev.audio_s);
+    if (ev.step_ms_median != null) $("sStep").textContent = ev.step_ms_median.toFixed(0) + " ms";
+    if (ev.first_char_s != null) $("sFirst").textContent = ev.first_char_s.toFixed(2) + " s";
     $("sWords").textContent = countUnits(text);
     onEot(ev);
     if (ev.speech_prob != null) {
@@ -901,7 +1033,7 @@ function handleEvent(ev) {
   } else if (ev.type === "loading") {
     if (!ev.on && ev.reload_required) { failInference(ev.error); return; }
     if (ev.on) {
-      running = false; clearInterval(clockTimer); video.pause();
+      running = false; clearInterval(clockTimer); video.pause(); newAudioEpoch();
       if (!switching) watchSwitch(beginSwitch(ev.clock_ms, ev.lang));
     } else finishSwitch(ev.error ? "Model load failed: " + ev.error : null);
   } else if (ev.type === "sys_hist") {
@@ -912,13 +1044,24 @@ function handleEvent(ev) {
     $("dramVal").textContent = `${(ev.dram_used_mb / 1024).toFixed(1)} / ${(ev.dram_total_mb / 1024).toFixed(1)} GB · ${Math.round(100 * ev.dram_used_mb / ev.dram_total_mb)}%`;
     redrawDram();
   } else if (ev.type === "state") {
-    if (ev.state === "running") setState("running", "Transcribing");
+    if (ev.state === "running") {
+      if (!microphoneInterrupted) setState("running", "Transcribing");
+    } else if (ev.state === "file_error") failAudio(sid, audioEpoch, new Error(ev.error));
     else if (ev.state === "done") {
-      setState("done", ev.reason === "empty" ? "No audio received" : "Done");
-      running = false; clearInterval(clockTimer);
-      if (ev.reason === "limit") {
+      fileLimitReached = audioFileSelected() && ev.finish_reason === "length";
+      if (microphoneInterrupted || fileLimitReached) setState("", "Incomplete");
+      else setState("done", ev.reason === "empty" ? "No audio received" : "Done");
+      running = false; clearInterval(clockTimer); stopMicrophone();
+      if (ev.audio_s != null) $("sAudio").textContent = fmtT(ev.audio_s);
+      if (microphoneInterrupted) {
+        $("notice").textContent = `${MICROPHONE_INTERRUPTION} This transcript is incomplete. Reconnect the microphone or grant access, then press Start microphone.`;
+      } else if (fileLimitReached) {
+        const notice = $("notice"); notice.style.display = "block";
+        notice.textContent = `${FILE_LIMIT_MESSAGE} This transcript is incomplete.`;
+      } else if (ev.reason === "limit") {
         const n = $("notice"); n.style.display = "block";
-        n.textContent = `Reached the per-run limit (about ${maxAudio} s of audio); the rest is not transcribed. The video can keep playing.`;
+        n.textContent = maxAudio ? `Reached the per-run limit (about ${maxAudio} s of audio).` :
+          "Reached the model’s transcription limit.";
       }
     } else {
       running = false; sid = null; video.pause(); clearInterval(clockTimer); newAudioEpoch();
@@ -933,7 +1076,7 @@ es.onerror = () => {
   else if (!transportFailure && !engineError) setState("", "Disconnected");
 };
 
-loadVideos();
+loadVideos().catch(error => upMsg("Could not load the sources: " + error.message, true));
 function showHelp(on) { $("help").classList.toggle("on", on); }
 $("helpBtn").onclick = () => showHelp(true);
 $("helpClose").onclick = () => showHelp(false);

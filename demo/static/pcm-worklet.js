@@ -5,84 +5,110 @@
 // Audio capture of the demo page: the page's sound (any rate, any channel count) to 16 kHz mono PCM16, posted in fixed
 // chunks (default 1600 samples = 100 ms).
 //
-// Pcm16Resampler: streaming linear interpolation. Output sample j is taken at source position j * srcRate / dstRate
-// (computed from j, so the rate never drifts), between the two source samples around it; channels are averaged first.
-// Used twice: by the AudioWorklet below and, where AudioWorklet is missing (plain http pages), by the page's
-// ScriptProcessorNode fallback (index.html loads this file as a script too).
+// Average the channels, then low-pass filter when requested and downsampling.
+// Interpolate at
+// output positions derived from the total sample count so block boundaries do
+// not affect timing. The AudioWorklet and ScriptProcessor use this same class.
 //
-// Pcm16Worklet: the AudioWorklet around it, plus an epoch: port.postMessage({epoch}) restarts the resampler, and every
-// chunk is posted as {epoch, buffer} so the page can drop audio captured before a start or a seek.
+// Pcm16Worklet adds an epoch: resetting changes the epoch, and each posted
+// chunk carries it so the page can discard samples captured before a start or seek.
 class Pcm16Resampler {
   constructor(srcRate, dstRate, chunkSamples, emit) {
     this.step = srcRate / dstRate;
     this.srcRate = srcRate;
     this.dstRate = dstRate;
     this.chunkSamples = chunkSamples;
-    this.emit = emit;                    // emit(ArrayBuffer of chunkSamples PCM16 samples)
+    this.emit = emit;
+
+    // Symmetric, DC-normalized Blackman-windowed sinc. Allow 12 output
+    // samples of lookahead and leave a transition band below target Nyquist.
+    const radius = this.step > 1 ? Math.ceil(12 * this.step) : 0;
+    this.passthrough = Float64Array.of(1);
+    this.filter = new Float64Array(2 * radius + 1);
+    this.filter[0] = 1;
+    if (radius) {
+      const cutoff = 0.42 / this.step;
+      let sum = 0;
+      for (let k = -radius; k <= radius; k += 1) {
+        const angle = 2 * Math.PI * cutoff * k;
+        const phase = Math.PI * k / radius;
+        const window = 0.42 + 0.5 * Math.cos(phase) + 0.08 * Math.cos(2 * phase);
+        const weight = (k === 0 ? 2 * cutoff : Math.sin(angle) / (Math.PI * k)) * window;
+        this.filter[k + radius] = weight;
+        sum += weight;
+      }
+      for (let k = 0; k < this.filter.length; k += 1) this.filter[k] /= sum;
+    }
+    // The ring holds the windows around both interpolation neighbours.
+    this.history = new Float64Array(this.filter.length + 1);
     this.reset();
   }
 
-  reset() {
-    this.j = 0;                          // index of the next output sample
-    this.base = 0;                       // source index of the first sample of the next block
-    this.last = 0;                       // source sample base - 1
+  reset(antialias = true) {
+    this.activeFilter = antialias ? this.filter : this.passthrough;
+    this.radius = (this.activeFilter.length - 1) / 2;
+    this.outputCount = 0;
+    this.sourceCount = 0;
+    this.first = this.last = 0;
     this.chunk = new Int16Array(this.chunkSamples);
     this.fill = 0;
     this.finished = false;
   }
 
+  sampleAt(index) {
+    if (index < 0) return this.first;
+    if (index >= this.sourceCount) return this.last;
+    return this.history[index % this.history.length];
+  }
+
+  emitSample(pos) {
+    const center = Math.floor(pos), fraction = pos - center;
+    const left = center - this.radius;
+    let value = 0, a = this.sampleAt(left);
+    for (let k = 0; k < this.activeFilter.length; k += 1) {
+      const b = this.sampleAt(left + k + 1);
+      value += this.activeFilter[k] * (a + (b - a) * fraction);
+      a = b;
+    }
+    const v = Math.max(-1, Math.min(1, value));
+    this.chunk[this.fill++] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    this.outputCount += 1;
+    if (this.fill === this.chunkSamples) {
+      const buf = this.chunk.buffer;
+      this.chunk = new Int16Array(this.chunkSamples);
+      this.fill = 0;
+      this.emit(buf);
+    }
+  }
+
   push(channels) {
-    if (this.finished) return;
-    const n = channels[0].length;
-    if (!n) return;
-    const mono = new Float64Array(n);
-    for (const ch of channels) {
-      for (let i = 0; i < n; i += 1) mono[i] += ch[i];
-    }
-    if (channels.length > 1) {
-      for (let i = 0; i < n; i += 1) mono[i] /= channels.length;
-    }
-    const at = (k) => (k < this.base ? this.last : mono[k - this.base]);
-    const end = this.base + n;           // source samples available: [base - 1, end)
-    for (;;) {
-      const pos = this.j * this.step;
-      const k = Math.floor(pos);
-      if (k + 1 >= end) break;           // the right neighbour is not here yet
-      const a = at(k);
-      const v = Math.max(-1, Math.min(1, a + (at(k + 1) - a) * (pos - k)));
-      this.chunk[this.fill] = v < 0 ? v * 0x8000 : v * 0x7fff;
-      this.fill += 1;
-      this.j += 1;
-      if (this.fill === this.chunkSamples) {
-        const buf = this.chunk.buffer;
-        this.chunk = new Int16Array(this.chunkSamples);
-        this.fill = 0;
-        this.emit(buf);
+    if (this.finished || !channels.length) return;
+    let pos = this.outputCount * this.step;
+    for (let i = 0; i < channels[0].length; i += 1) {
+      let mono = 0;
+      for (const channel of channels) mono += channel[i];
+      mono /= channels.length;
+      if (this.sourceCount === 0) this.first = mono;
+      this.last = mono;
+      this.history[this.sourceCount % this.history.length] = mono;
+      this.sourceCount += 1;
+      while (Math.floor(pos) + this.radius + 1 < this.sourceCount) {
+        this.emitSample(pos);
+        pos = this.outputCount * this.step;
       }
     }
-    this.last = mono[n - 1];
-    this.base = end;
   }
 
   flush() {
     if (this.finished) return;
     this.finished = true;
-    // At EOF there is no right interpolation neighbour. Hold the final sample
-    // for the remaining source duration; do not add a whole synthetic chunk.
-    const targetCount = Math.ceil(this.base * this.dstRate / this.srcRate);
-    const v = Math.max(-1, Math.min(1, this.last));
-    while (this.j < targetCount) {
-      this.chunk[this.fill++] = v < 0 ? v * 0x8000 : v * 0x7fff;
-      this.j++;
-      if (this.fill === this.chunkSamples) {
-        const buf = this.chunk.buffer;
-        this.chunk = new Int16Array(this.chunkSamples); this.fill = 0;
-        this.emit(buf);
-      }
-    }
+    // Extend the endpoint only for filtering and interpolation. Keep the
+    // output length tied to the captured source duration.
+    const targetCount = Math.ceil(this.sourceCount * this.dstRate / this.srcRate);
+    while (this.outputCount < targetCount) this.emitSample(this.outputCount * this.step);
     if (this.fill) {
       this.emit(this.chunk.slice(0, this.fill).buffer);
-      this.chunk = new Int16Array(this.chunkSamples); this.fill = 0;
+      this.fill = 0;
     }
   }
 }
@@ -104,7 +130,7 @@ if (typeof AudioWorkletProcessor !== "undefined") {
           }
         } else if (e.data && e.data.epoch !== undefined) {
           this.epoch = e.data.epoch;
-          this.resampler.reset();
+          this.resampler.reset(e.data.antialias);
         }
       };
     }

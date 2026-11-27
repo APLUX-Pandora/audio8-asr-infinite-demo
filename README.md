@@ -73,7 +73,9 @@ hf download APLUX-Pandora/Audio8-ASR-Infinite-160ms --local-dir models --include
 bash demo/run.sh --port 8765
 ```
 
-Open `http://<device-ip>:8765/` and select a built-in video or upload one to transcribe. Stop it with `Ctrl+C`. See the [Web Demo guide](demo/README.md).
+Open `http://<device-ip>:8765/` to choose a built-in video or upload audio or video.
+For the live microphone, use HTTPS or open `http://localhost:8765/` on the computer running the browser after forwarding the port there.
+Stop the Demo with `Ctrl+C`. See the [Web Demo guide](demo/README.md#using-the-page).
 
 ## 4. Python Usage
 

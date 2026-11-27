@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Web demo server (runs on the board).
 
-One page (static/index.html): the browser plays a video (media/<id>, with sound) and captures its audio itself:
+The browser captures sound from a playing video (media/<id>) or a microphone:
 Web Audio + an AudioWorklet (static/pcm-worklet.js) resample it to 16 kHz PCM16 and POST
 100 ms chunks to /api/audio. The server feeds them into the SDK engine (installed Python SDK) and pushes the text
 back over Server-Sent Events. Pause = no audio = transcription pauses; seeking starts a fresh session at that position.
@@ -13,11 +13,11 @@ back over Server-Sent Events. Pause = no audio = transcription pauses; seeking s
 - End of turn: the model's semantic-VAD probabilities come with every token and go to the page (meter, curves,
   paragraph breaks).
 - Board DRAM (sys events every 0.5 s) and per-token RTF (step time / clock) for the page's charts.
-- Uploads (PUT raw body -> media/uploads/, any length, must have an audio track), deleting uploads (built-in videos are
-  protected), audio clock (160 / 80 ms) and transcription language (en / zh) switches = engine reload in the worker
-  thread (the page shows a loading overlay meanwhile).
+- Upload and delete local audio and video files. Video uploads require an audio track and built-in videos are protected.
+- Audio clock (160 / 80 ms) and transcription language (en / zh) changes reload the engine in the worker thread.
 - With rolling disabled (roll_s=0 in the engine) a run stops near LM position 480 (KV capacity guard).
-One session at a time (a new Start resets). Standard library http.server only; ffprobe for durations and the audio check.
+Audio uploads are decoded to WAV and transcribed through the SDK file stream.
+One session at a time (a new Start resets). HTTP uses the standard library.
 
 usage: demo/run.sh [--port 8765]   (environment variables: demo/README.md)
 """
@@ -29,22 +29,28 @@ import queue
 import re
 import signal
 import subprocess
-import threading
 import tempfile
+import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import numpy as np
+from audio_upload import AUDIO_FORMATS, MAX_AUDIO_UPLOAD_BYTES, normalize_audio
+from model_package_check import PackageVerifier
+from pandora_audio8_asr_infinite import (
+    A8Error,
+    ASRModel,
+    HotwordConfig,
+    resolve_model_dir,
+)
+from reset_policy import ResetPolicy
+from soundfile import SoundFileError
+from vad_gate import SileroGate
+from vad_worker import OwnedSileroGate
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-
-import numpy as np  # noqa: E402
-
-from pandora_audio8_asr_infinite import ASRModel, HotwordConfig, A8Error, resolve_model_dir  # noqa: E402
-from model_package_check import PackageVerifier
-from reset_policy import ResetPolicy  # noqa: E402
-from vad_gate import SileroGate  # noqa: E402
-from vad_worker import OwnedSileroGate  # noqa: E402
 
 MODELS = None                         # resolved after argument parsing; --help needs no installed package
 
@@ -58,12 +64,13 @@ MAX_AUDIO_CHUNKS = 512
 MAX_AUDIO_CHUNK_BYTES = 32000  # at most one second of mono16k PCM16 per request
 # unlimited length: the engine's LM rolls a 30 s context; without rolling (roll_s 0) the per-run capacity guard applies
 VIDEO_EXT = (".mp4", ".m4v", ".mov", ".webm", ".mkv")
+MICROPHONE_ID = "@microphone"
 CLOCKS, LANGS = ("160", "80"), ("en", "zh")
 MEDIA_LOCK = threading.RLock()
 
 
 def media_path(vid):
-    """Video id (path relative to media/) -> absolute path, or None if it escapes media/ or does not exist."""
+    """Return an existing media file for a path relative to media/."""
     p = os.path.normpath(os.path.join(MEDIA, vid))      # lexical check (media files may be symlinks, e.g. a dev checkout)
     return p if p.startswith(os.path.normpath(MEDIA) + os.sep) and os.path.isfile(p) else None
 
@@ -77,7 +84,7 @@ def legacy_meta_of(path):
     return os.path.splitext(path)[0] + ".json"
 
 
-def video_lang(path):
+def media_metadata(path):
     """Prefer the owned sidecar; read old stem-only sidecars for existing media."""
     with MEDIA_LOCK:
         metadata = meta_of(path)
@@ -85,18 +92,26 @@ def video_lang(path):
             metadata = legacy_meta_of(path)
         try:
             with open(metadata) as source:
-                lang = json.load(source).get("lang", "zh")
+                data = json.load(source)
+                if isinstance(data, dict):
+                    return data
         except (OSError, ValueError):
-            lang = "zh"
-        return lang if lang in LANGS else "zh"
+            pass
+        return {}
 
 
-def publish_upload(tmp, stem, ext, lang):
+def video_lang(path):
+    lang = media_metadata(path).get("lang", "zh")
+    return lang if lang in LANGS else "zh"
+
+
+def publish_upload(tmp, stem, ext, lang, *, source_ext=None):
     """Reserve both names and roll back only objects acquired by this request."""
     with MEDIA_LOCK:
         k = 0
         while True:
-            dst = os.path.join(UPLOADS, f"{stem}{('-' + str(k)) if k else ''}{ext}")
+            unique_stem = f"{stem}{('-' + str(k)) if k else ''}"
+            dst = os.path.join(UPLOADS, unique_stem + ext)
             try:
                 os.link(tmp, dst)
             except FileExistsError:
@@ -107,7 +122,10 @@ def publish_upload(tmp, stem, ext, lang):
                 # An orphan sidecar is reserved too; never overwrite it.
                 with open(meta_of(dst), "x") as metadata:
                     owned_meta = True
-                    json.dump({"lang": lang if lang in LANGS else "zh"}, metadata)
+                    data = {"lang": lang if lang in LANGS else "zh"}
+                    if source_ext:
+                        data["name"] = unique_stem + source_ext
+                    json.dump(data, metadata)
             except BaseException as error:
                 os.unlink(dst)
                 if owned_meta:
@@ -262,11 +280,15 @@ class Session:
                 continue
             for f in sorted(os.listdir(d)):
                 p = f"{d}/{f}"
-                if f.lower().endswith(VIDEO_EXT):
+                is_audio = not builtin and f.lower().endswith(".wav")
+                if is_audio or f.lower().endswith(VIDEO_EXT):
                     if p not in self.durs:
                         self.durs[p] = duration_s(p)
-                    out.append({"id": os.path.relpath(p, MEDIA), "name": f, "builtin": builtin, "duration_s": self.durs[p],
-                                "lang": video_lang(p)})
+                    metadata = media_metadata(p)
+                    lang = metadata.get("lang")
+                    out.append({"id": os.path.relpath(p, MEDIA), "name": metadata.get("name", f) if is_audio else f,
+                                "builtin": builtin, "duration_s": self.durs[p],
+                                "kind": "audio" if is_audio else "video", "lang": lang if lang in LANGS else "zh"})
         return out
 
     def sysmon(self):
@@ -284,7 +306,7 @@ class Session:
             self.closing.wait(0.5)
 
     # ------------------------------------------------------------ control (HTTP threads)
-    def start(self, vid, offset_s=0.0, jump=False, hotwords=None):
+    def start(self, vid, offset_s=0.0, jump=False, hotwords=None, microphone_lang=None):
         """New run of `vid` from offset_s (a fresh engine session at that point of the video). jump = the page moved the
         playhead during a run (the transcript is kept and gets a time separator)."""
         config = hotwords if hotwords is not None else {"words": [], "top_k": 50, "start_boost": 6.0, "continuation_boost": 8.0}
@@ -293,9 +315,15 @@ class Session:
             config = validate_hotwords(config)
         except ValueError as e:
             return None, str(e)
-        p = media_path(vid)
-        if p is None:
-            return None, "unknown video"
+        is_audio = False
+        if vid == MICROPHONE_ID:
+            source_lang = microphone_lang
+        else:
+            p = media_path(vid)
+            if p is None or not p.lower().endswith((*VIDEO_EXT, ".wav")):
+                return None, "unknown media file"
+            is_audio = p.lower().endswith(".wav")
+            source_lang = video_lang(p)
         with self.lock:
             if self.closing.is_set():
                 return None, "server is closing"
@@ -303,18 +331,15 @@ class Session:
                 return None, "engine is loading"
             if self.engine_error:
                 return None, "model requires manual reload: " + self.engine_error
-        if video_lang(p) != self.lang:                   # the page switches the language when a video is selected
-            return None, f"this video is {video_lang(p)}, the engine is {self.lang}: switch first"
-        with self.lock:
-            if self.closing.is_set() or self.state == "reload" or self.engine_error:
-                return None, "model is unavailable; wait for loading or reload the failed model"
+            if source_lang != self.lang:
+                return None, f"This source requires {source_lang}; the model is using {self.lang}."
             self.sid += 1
             self.hotwords = config
             self.video, self.offset_s, self.jump = vid, max(0.0, float(offset_s)), bool(jump)
             self.ended = False
             self.audio = collections.deque(c for c in self.audio if c[0] == self.sid)
             self.audio_pending_samples = 0
-            self.state = "reset"                         # the worker resets the engine, then runs
+            self.state = "file" if is_audio else "reset"  # the SDK file path starts after the client signals EOF
             return self.sid, None
 
     def push_audio(self, sid, pcm16):
@@ -336,7 +361,7 @@ class Session:
         return 200, None
 
     def end(self, sid):
-        """The video reached its end: drain the remaining audio, then finish."""
+        """The client has no more PCM to send, or a complete audio file is ready."""
         with self.lock:
             if sid == self.sid:
                 self.ended = True
@@ -429,10 +454,15 @@ class Session:
         self.broadcast({"type": "loading", "on": False, "reload_required": True, "error": self.engine_error})
 
     def upload(self, name, rfile, length, lang="zh"):
-        base = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(name)).strip("._") or "video.mp4"
-        stem, ext = os.path.splitext(base)
-        if ext.lower() not in VIDEO_EXT:
-            return None, f"unsupported file type {ext or '(none)'}; use {', '.join(VIDEO_EXT)}"
+        stem, ext = os.path.splitext(os.path.basename(name))
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
+        audio = ext.lower() in AUDIO_FORMATS
+        if not audio and ext.lower() not in VIDEO_EXT:
+            supported = ", ".join((*AUDIO_FORMATS, *VIDEO_EXT))
+            return None, f"unsupported file type {ext or '(none)'}; use {supported}"
+        stem = stem or ("audio" if audio else "video")
+        if audio and length > MAX_AUDIO_UPLOAD_BYTES:
+            return None, "Audio uploads must be 256 MiB or smaller."
         os.makedirs(UPLOADS, exist_ok=True)
         # Every request owns its staging file. Validate before publishing it;
         # hard-link creation reserves a complete final file without overwriting
@@ -449,10 +479,18 @@ class Session:
                     left -= len(chunk)
             if left:
                 return None, "upload interrupted"
-            if not has_audio(tmp):
-                return None, "no audio track"
-            duration = duration_s(tmp)
-            dst = publish_upload(tmp, stem, ext, lang)
+            if audio:
+                with tempfile.NamedTemporaryFile(prefix=".decode-", suffix=".part", dir=UPLOADS) as decoded:
+                    error = normalize_audio(tmp, decoded.name, ext.lower())
+                    if error:
+                        return None, error
+                    duration = duration_s(decoded.name)
+                    dst = publish_upload(decoded.name, stem, ".wav", lang, source_ext=ext)
+            else:
+                if not has_audio(tmp):
+                    return None, "no audio track"
+                duration = duration_s(tmp)
+                dst = publish_upload(tmp, stem, ext, lang)
             return {"id": os.path.relpath(dst, MEDIA), "duration_s": duration}, None
         finally:
             os.unlink(tmp)
@@ -461,7 +499,7 @@ class Session:
         with MEDIA_LOCK:
             p = media_path(vid)
             if p is None or not p.startswith(os.path.normpath(UPLOADS) + os.sep):
-                return "only uploaded videos can be deleted"
+                return "only uploaded media can be deleted"
             if self.video == vid:
                 self.stop()
             # Stem-only legacy metadata may belong to other extensions. Keep
@@ -473,6 +511,41 @@ class Session:
             return None
 
     # ------------------------------------------------------------ engine (worker thread only)
+    def transcribe_file(self, sid):
+        with self.lock:
+            if self.sid != sid or self.state != "file" or self.closing.is_set():
+                return
+            path = media_path(self.video)
+            hotwords = dict(self.hotwords)
+        hints = HotwordConfig(tuple(hotwords["words"]), hotwords["top_k"],
+                              hotwords["start_boost"], hotwords["continuation_boost"])
+        if self.asr is not None:
+            self.asr.close()
+            self.asr = None
+        started, first_char = time.monotonic(), None
+        try:
+            if path is None:
+                raise FileNotFoundError
+            with self.model.transcribe_stream(path, language=self.lang, hotwords=hints) as stream:
+                for update in stream:
+                    with self.lock:
+                        if self.sid != sid or self.state != "file" or self.closing.is_set():
+                            return
+                        if update.delta:
+                            if first_char is None:
+                                first_char = round(time.monotonic() - started, 2)
+                            self.broadcast({"type": "text", "sid": sid, "piece": update.delta,
+                                            "first_char_s": first_char})
+                result = stream.result
+            event = {"state": "done", "reason": "limit" if result.finish_reason == "length" else "end",
+                     "finish_reason": result.finish_reason, "audio_s": round(result.duration_s, 2)}
+        except (OSError, ValueError, SoundFileError):
+            event = {"state": "file_error", "error": "Could not open or read this audio file. Upload it again and retry."}
+        with self.lock:
+            if self.sid == sid and self.state == "file":
+                self.state = "done"
+                self.broadcast({"type": "state", "sid": sid, **event})
+
     def worker(self):
         while not self.closing.is_set():                   # keep the engine thread alive across unexpected errors
             try:
@@ -501,9 +574,16 @@ class Session:
             if state == "reload":
                 self.reload()
                 continue
+            if state == "file":
+                if ended:
+                    self.transcribe_file(sid)
+                else:
+                    time.sleep(0.01)
+                continue
             asr = self.asr
             if state == "reset":
-                asr.close()
+                if asr is not None:
+                    asr.close()
                 with self.lock:
                     off_s, jump = self.offset_s, self.jump
                     hotwords = dict(self.hotwords)
@@ -725,6 +805,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._events()
         if p.startswith("/media/"):
             f = media_path(urllib.parse.unquote(p[len("/media/"):]))
+            if f and f.lower().endswith(".wav"):
+                return self._file(f, "audio/wav")
             if f and f.lower().endswith(VIDEO_EXT):
                 ext = os.path.splitext(f)[1].lower()
                 return self._file(f, {".webm": "video/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime"}.get(ext, "video/mp4"))
@@ -733,10 +815,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         p, q = self.path.split("?")[0], urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         if p == "/api/upload":
-            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
             if n <= 0:
-                return self._json({"error": "empty upload"}, 400)
-            res, err = S.upload(q.get("name", ["video.mp4"])[0], self.rfile, n, q.get("lang", ["zh"])[0])
+                return self._json({"error": "Empty upload or invalid length"}, 400)
+            try:
+                res, err = S.upload(q.get("name", ["video.mp4"])[0], self.rfile, n, q.get("lang", ["zh"])[0])
+            except OSError:
+                return self._json({"error": "Could not store the upload. Try again."}, 500)
             return self._json(res if err is None else {"error": err}, 200 if err is None else 400)
         self.send_error(404)
 
@@ -764,7 +852,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": error} if error else {}, status)
         b = self._body()
         if p == "/api/start":
-            sid, err = S.start(b.get("video", ""), b.get("offset_s", 0.0), b.get("jump", False), b.get("hotwords"))
+            sid, err = S.start(b.get("video", ""), b.get("offset_s", 0.0), b.get("jump", False),
+                               b.get("hotwords"), b.get("microphone_lang"))
             return self._json({"sid": sid} if err is None else {"error": err}, 200 if err is None else 409)
         if p == "/api/end":
             S.end(b.get("sid"))
